@@ -1,7 +1,7 @@
 # Django Project
 
 ## 📌 Introduction
-Ce projet est le backend d'une application web construite avec Django. Il sert à la gestion de stock.
+Ce projet est une application web construite avec Django. Il sert à la gestion de stock.
 
 ## 🚀 Installation
 
@@ -12,8 +12,7 @@ Assurez-vous d'avoir installé :
 - **virtualenv** (environnement virtuel)
 
 ### 2️⃣ Cloner le projet
-```sh
-git clone https://github.com:ngeukam/StockManagement.git
+git clone https://github.com/votre-utilisateur/votre-projet.git
 cd votre-projet
 
 ### 3️⃣ Créer et activer un environnement virtuel
