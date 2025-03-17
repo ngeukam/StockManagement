@@ -17,11 +17,12 @@ class ModuleView(generics.CreateAPIView):
     def get(self,request):
         permission_module_ids=[]
         #Return all Modules for Super Admin and Top Domain Level User
-        if request.user.role=='Super Admin' or request.user.domain_user_id.id==request.user.id:
+        if request.user.role =='Super Admin' or request.user.domain_user_id.id==request.user.id:
             menus=Modules.objects.filter(is_menu=True,parent_id=None,is_active=True).order_by('display_order')
         else:
             permission_module_ids=UserPermissions.objects.filter(user=request.user.id,is_permission=True).values_list('module_id',flat=True)
             menus=Modules.objects.filter(is_menu=True,parent_id=None,is_active=True).filter(id__in=permission_module_ids).order_by('display_order')
+            print('menus', permission_module_ids)
         
         serialized_menus=serialize('json',menus)
         serialized_menus=json.loads(serialized_menus)

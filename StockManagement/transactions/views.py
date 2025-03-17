@@ -1,10 +1,10 @@
-from StockManagement.Helpers import CommonListAPIMixin, CommonListAPIMixinWithFilter, CustomPageNumberPagination, getDynamicFormFields, renderResponse
+from StockManagement.Helpers import CustomPageNumberPagination, getDynamicFormFields, renderResponse
 from productservices.models import Products
 from rest_framework import generics, status, serializers
 from inventory.models import Stock
 from userservices.models import Users
 from .models import PurchaseBillDetails, PurchaseItem, PurchaseBill, SaleBillDetails
-from .serializers import PurchaseItemSerializer, PurchaseBillSerializer, SaleBillDetailsSerializer
+from .serializers import PurchaseItemSerializer, PurchaseBillSerializer
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.permissions import IsAuthenticated
 from .models import SaleBill, SaleItem
@@ -14,6 +14,7 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from django.shortcuts import get_object_or_404
 from django.db import transaction
+from StockManagement.permission import IsAdmin, IsSuperAdmin
 
 
 # Détails d'un bon de commande (PurchaseBill)
@@ -100,16 +101,87 @@ class PurchaseBillCreateAPIView(generics.CreateAPIView):
                 purchasebilldetailsobj = PurchaseBillDetails(billno=purchase_bill)
                 purchasebilldetailsobj.save()
                 # Mettre à jour le stock
-                stock = get_object_or_404(Stock, product_id=item_data['product_id'])
-                
-                stock.quantity += int(purchase_item.quantity)
-                stock.save()
+                if purchase_bill.payment_status not in ['UNPAID', 'CANCELLED']:
+                    stock = get_object_or_404(Stock, product_id=item_data['product_id'])
+                    stock.quantity += int(purchase_item.quantity)
+                    stock.save()
 
             # Retourner une réponse
         return Response({
             'message': 'Purchase bill and items have been created successfully.',
             'purchaseBill': PurchaseBillSerializer(purchase_bill).data
         }, status=status.HTTP_201_CREATED)
+
+#Mettre à jour un bon de commande
+class PurchaseBillUpdateAPIView(generics.UpdateAPIView):
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+    queryset = PurchaseBill.objects.all()
+    serializer_class = PurchaseBillSerializer
+
+    def update(self, request, *args, **kwargs):
+        """
+        Update a PurchaseBill and its related PurchaseItems.
+        """
+        instance = self.get_object()
+
+        # Ensure the bill is not in a state that prevents updates (e.g., PAID or CANCELLED)
+        if instance.payment_status in ['PAID', 'CANCELLED']:
+            return Response(
+                {"error": "Cannot update a bill with status PAID or CANCELLED"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        with transaction.atomic():
+            # Update the PurchaseBill instance
+            serializer = self.get_serializer(instance, data=request.data, partial=True)
+            serializer.is_valid(raise_exception=True)
+            self.perform_update(serializer)
+
+            # Handle PurchaseItem updates
+            items_data = request.data.get('items', [])
+            existing_items = {item.id: item for item in PurchaseItem.objects.filter(billno=instance)}
+
+            for item_data in items_data:
+                item_id = item_data.get('id')
+                if item_id and item_id in existing_items:
+                    # Update existing item
+                    item = existing_items[item_id]
+                    old_quantity = item.quantity
+                    item_serializer = PurchaseItemSerializer(item, data=item_data, partial=True)
+                else:
+                    # Create new item
+                    item_data['billno'] = instance.billno
+                    item_serializer = PurchaseItemSerializer(data=item_data)
+
+                if not item_serializer.is_valid():
+                    raise serializers.ValidationError(item_serializer.errors)
+
+                item = item_serializer.save()
+
+                # Update stock if payment status is not UNPAID or CANCELLED
+                if instance.payment_status not in ['UNPAID', 'CANCELLED']:
+                    stock = get_object_or_404(Stock, product_id=item.product_id.id)
+                    stock.quantity += int(item.quantity)
+                    stock.save()
+
+            # Delete items not included in the request
+            item_ids_in_request = [item_data.get('id') for item_data in items_data if item_data.get('id')]
+            items_to_delete = PurchaseItem.objects.filter(billno=instance).exclude(id__in=item_ids_in_request)
+            for item in items_to_delete:
+                if instance.payment_status not in ['UNPAID', 'CANCELLED']:
+                    # Adjust stock for deleted items
+                    stock = get_object_or_404(Stock, product_id=item.product_id.id)
+                    stock.quantity -= int(item.quantity)
+                    stock.save()
+                item.delete()
+
+            return Response({
+                'message': 'Purchase bill and items have been updated successfully.',
+                'purchaseBill': serializer.data
+            }, status=status.HTTP_200_OK)
+
+
 
 # Liste des bons de commande (PurchaseBill)
 class PurchaseBillListAPIView(generics.ListAPIView):
@@ -125,27 +197,54 @@ class PurchaseBillListAPIView(generics.ListAPIView):
 # Supprimer une facture d'achat et restaurer les articles au stock
 class PurchaseBillDeleteAPIView(APIView):
     authentication_classes = [JWTAuthentication]
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsSuperAdmin]
 
     def delete(self, request, pk):
         try:
+            # Récupérer la facture d'achat
             purchase_bill = PurchaseBill.objects.get(billno=pk)
+
+            # Vérifier le statut de la facture
+            if purchase_bill.payment_status in ["PAID", "PARTIAL PAID"]:
+                return Response(
+                    {"error": "Cannot delete a bill with status PAID or PARTIAL PAID"},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+
+            # Récupérer les articles associés à la facture
             items = PurchaseItem.objects.filter(billno=purchase_bill.billno)
 
             # Restaurer les articles au stock
             for item in items:
                 stock = Stock.objects.get(product_id=item.product_id.id)
-                stock.quantity += item.quantity
+                stock.quantity -= item.quantity
                 stock.save()
 
-            # Supprimer la facture de vente
+            # Supprimer la facture d'achat
             purchase_bill.delete()
 
-            return Response({'status': 'Purchase bill deleted successfully'}, status=200)
+            return Response(
+                {"status": "Purchase bill deleted successfully"},
+                status=status.HTTP_200_OK,
+            )
 
-        except SaleBill.DoesNotExist:
-            return Response({'error': 'Purchase bill not found'}, status=404)
-        
+        except PurchaseBill.DoesNotExist:
+            return Response(
+                {"error": "Purchase bill not found"}, status=status.HTTP_404_NOT_FOUND
+            )
+        except Exception as e:
+            return Response(
+                {"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+      
+      # Détails d'une facture de vente (consultation, modification, suppression)
+
+class PurchaseBillRetrieveAPIView(generics.RetrieveAPIView):
+    queryset = PurchaseBill.objects.all()
+    serializer_class = PurchaseBillSerializer
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+      
 # Liste et création des factures de vente
 class SaleBillListAPIView(generics.ListAPIView):
     serializer_class = SaleBillSerializer
@@ -158,7 +257,7 @@ class SaleBillListAPIView(generics.ListAPIView):
     
 
 # Détails d'une facture de vente (consultation, modification, suppression)
-class SaleBillRetrieveUpdateDestroyAPIView(generics.RetrieveAPIView):
+class SaleBillRetrieveAPIView(generics.RetrieveAPIView):
     queryset = SaleBill.objects.all()
     serializer_class = SaleBillSerializer
     authentication_classes = [JWTAuthentication]
@@ -180,7 +279,8 @@ class SaleCreateAPIView(APIView):
         # Récupérer les données de la facture et des articles
         bill_data = request.data.get('bill', {})
         items_data = request.data.get('items', [])
-
+        print('bill_data', bill_data)
+        print('items_data', items_data)
         if not items_data:
             return Response({"error": "No items provided."}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -252,7 +352,7 @@ class SaleCreateAPIView(APIView):
 # Supprimer une facture de vente et restaurer les articles au stock
 class SaleBillDeleteAPIView(APIView):
     authentication_classes = [JWTAuthentication]
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsAdmin, IsSuperAdmin]
 
     def delete(self, request, pk):
         try:

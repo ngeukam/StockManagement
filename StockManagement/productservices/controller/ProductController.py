@@ -59,7 +59,7 @@ class ProductListView(generics.ListAPIView):
     pagination_class = CustomPageNumberPagination
 
     def get_queryset(self):
-        queryset=Products.objects.filter(domain_user_id=self.request.user.domain_user_id.id)
+        queryset=Products.objects.filter(domain_user_id=self.request.user.domain_user_id.id).order_by('-id')
         return queryset
     
     @CommonListAPIMixin.common_list_decorator(ProductSerializer)

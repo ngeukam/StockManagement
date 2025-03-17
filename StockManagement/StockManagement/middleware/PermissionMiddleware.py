@@ -45,10 +45,8 @@ class PermissionMiddleware:
 
 def urlToSkip():
     modules = list(ModuleUrls.objects.filter(module__isnull=True).values_list('url', flat=True))
-    
     def should_skip(url):
         for skip_url in modules:
-            print(url[:len(skip_url)])
             if url[:len(skip_url)] == skip_url:  # Compare only the relevant substring
                 return True
         return False

@@ -1,3 +1,4 @@
+from django.shortcuts import get_object_or_404
 from StockManagement.Helpers import CommonListAPIMixin, CommonListAPIMixinWithFilter, CustomPageNumberPagination, createParsedCreatedAtUpdatedAt, executeQuery, renderResponse
 from userservices.models import Modules, UserPermissions, Users
 from rest_framework.views import APIView
@@ -81,21 +82,21 @@ class UserPermissionsView(APIView):
     permission_classes = [IsAuthenticated]
     authentication_classes = [JWTAuthentication]
     def get(self,request,pk):
-        query='''
-            SELECT 
+        query = '''
+            SELECT DISTINCT
                 userservices_modules.module_name, 
                 userservices_modules.id as module_id, 
                 userservices_modules.parent_id_id, 
-                COALESCE(userservices_userpermissions.is_permission,0) as is_permission,
+                COALESCE(userservices_userpermissions.is_permission, 0) as is_permission,
                 userservices_userpermissions.user_id, 
                 userservices_userpermissions.domain_user_id_id 
-                FROM
-                    `userservices_modules` 
-                    left join 
-                        userservices_userpermissions
-                    on 
-                    userservices_userpermissions.module_id=userservices_modules.id and 
-            userservices_userpermissions.user_id=%s;
+            FROM
+                userservices_modules 
+            LEFT JOIN 
+                userservices_userpermissions
+            ON 
+                userservices_userpermissions.module_id = userservices_modules.id 
+                AND userservices_userpermissions.user_id = %s;
         '''
 
         permissions=executeQuery(query,[pk])
@@ -113,26 +114,61 @@ class UserPermissionsView(APIView):
         permissionList=permissionList.values()
         return renderResponse(data=permissionList,message="User Permissions",status=200)
 
-    def post(self,request,pk):
-        data=request.data
+    def post(self, request, pk):
+        """
+        Update or create user permissions.
+        :param pk: User ID
+        """
+        data = request.data
+
         for item in data:
-            if 'id' in item and item['id']!=None:
-                permission=UserPermissions.objects.get(id=item['id'])
-                permission.is_permission=item['is_permission']
+            module_id = item.get('module_id')
+            is_permission = item.get('is_permission')
+
+            # Check if a permission already exists for this module and user
+            existing_permission = UserPermissions.objects.filter(
+                module_id=module_id,
+                user_id=pk
+            ).first()
+
+            if existing_permission:
+                # Update the existing permission
+                existing_permission.is_permission = is_permission
+                existing_permission.save()
             else:
-                module=Modules.objects.get(id=item['module_id'])
-                permission=UserPermissions(module=module,user_id=pk,is_permission=item['is_permission'])
+                # Create a new permission
+                module = get_object_or_404(Modules, id=module_id)
+                permission = UserPermissions(
+                    module=module,
+                    user_id=pk,
+                    is_permission=is_permission
+                )
+                permission.save()
 
-            permission.save()
-
+            # Handle children permissions
             if 'children' in item:
                 for child in item['children']:
-                    if 'id' in child and child['id']!=None:
-                        permission=UserPermissions.objects.get(id=child['id'])
-                        permission.is_permission=child['is_permission']
-                    else:
-                        module=Modules.objects.get(id=child['module_id'])
-                        permission=UserPermissions(module=module,user_id=pk,is_permission=child['is_permission'])
+                    child_module_id = child.get('module_id')
+                    child_is_permission = child.get('is_permission')
 
-                        permission.save()
+                    # Check if a permission already exists for this child module and user
+                    existing_child_permission = UserPermissions.objects.filter(
+                        module_id=child_module_id,
+                        user_id=pk
+                    ).first()
+
+                    if existing_child_permission:
+                        # Update the existing child permission
+                        existing_child_permission.is_permission = child_is_permission
+                        existing_child_permission.save()
+                    else:
+                        # Create a new child permission
+                        child_module = get_object_or_404(Modules, id=child_module_id)
+                        child_permission = UserPermissions(
+                            module=child_module,
+                            user_id=pk,
+                            is_permission=child_is_permission
+                        )
+                        child_permission.save()
+
         return renderResponse(data=[],message="Permissions Updated",status=200)

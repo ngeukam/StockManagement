@@ -4,6 +4,7 @@ from .models import PurchaseBill, PurchaseItem, PurchaseBillDetails, SaleItem, S
 
 class PurchaseItemSerializer(serializers.ModelSerializer):
     product_id_name = serializers.CharField(source='product_id.name', read_only=True)
+    sku = serializers.CharField(source='product_id.sku', read_only=True)
     class Meta:
         model = PurchaseItem
         fields = '__all__'
@@ -17,6 +18,7 @@ class PurchaseBillSerializer(serializers.ModelSerializer):
     items = PurchaseItemSerializer(many=True, read_only=True, source='purchasebillno')  # Use correct source
     details = PurchaseBillDetailsSerializer(many=True, read_only=True, source='purchasedetailsbillno')
     supplier_id=serializers.CharField(source='supplier_id.email',read_only=True)
+    supplier_name=serializers.CharField(source='supplier_id.username',read_only=True)
     created_by_user_id=serializers.CharField(source='created_by_user_id.username',read_only=True)
     domain_user_id=serializers.CharField(source='domain_user_id.username',read_only=True)
     class Meta:
